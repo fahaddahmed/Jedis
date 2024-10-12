@@ -5,15 +5,15 @@ import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
-import java.util.Iterator;
-import java.util.Set;
-import java.util.List;
-import java.util.ArrayList;
+import java.util.*;
+
 
 public class Main {
 
     private static final int PORT = 6379;
     private static final String PONG_RESPONSE = "+PONG\r\n";
+    private static final HashMap<String, ValueWithExpiry> storeSet = new HashMap<>(); // Store with value and expiry time
+    private static final String NULL_RESPONSE = "$-1\r\n";
 
     public static void main(String[] args) {
         try {
@@ -114,23 +114,102 @@ public class Main {
 
         // Parse the RESP command using the parseRESP method
         List<String> parsedElements = parseRESP(request);
-        
-        if (!parsedElements.isEmpty()) {
-            String command = parsedElements.get(0).toLowerCase();  // Get command name and make it case insensitive
-            
-            if (command.equals("echo")) {
-                if (parsedElements.size() > 1) {
-                    String echoArgument = parsedElements.get(1);
-                    String echoResponse = "$" + echoArgument.length() + "\r\n" + echoArgument + "\r\n";
-                    
-                    ByteBuffer echoBuffer = ByteBuffer.wrap(echoResponse.getBytes());
-                    clientChannel.write(echoBuffer);  // Respond to client
-                }
-            } else if (command.equals("ping")) {
-                // Respond with PONG
-                ByteBuffer responseBuffer = ByteBuffer.wrap(PONG_RESPONSE.getBytes());
-                clientChannel.write(responseBuffer);
-            } 
+        if (parsedElements.isEmpty()) {
+            return;
         }
+        
+        String command = parsedElements.get(0).toLowerCase();  // Get command name and make it case insensitive
+        
+        if (command.equals("echo")) {
+            if (parsedElements.size() <= 1) {
+                return;
+            }
+
+            String echoArgument = parsedElements.get(1);
+            String echoResponse = "$" + echoArgument.length() + "\r\n" + echoArgument + "\r\n";
+            
+            ByteBuffer echoBuffer = ByteBuffer.wrap(echoResponse.getBytes());
+            clientChannel.write(echoBuffer);  // Respond to client
+        } else if (command.equals("ping")) {
+            // Respond with PONG
+            ByteBuffer responseBuffer = ByteBuffer.wrap(PONG_RESPONSE.getBytes());
+            clientChannel.write(responseBuffer);
+        } else if (command.equals("set")) {
+            handleSetCommand(parsedElements, clientChannel);
+        } else if (command.equals("get")) {
+            String userGivenKey = parsedElements.get(1); 
+
+            String valueFromStore = getValueWithExpiryCheck(userGivenKey);
+
+            if (valueFromStore == null) {
+                ByteBuffer responseBuffer = ByteBuffer.wrap(NULL_RESPONSE.getBytes());
+                clientChannel.write(responseBuffer);
+                return;
+            }
+            
+            ByteBuffer encodedValue = encodeStringAsRESP(valueFromStore);
+            clientChannel.write(encodedValue);
+        }
+        
+    }
+
+    /**
+     * Handles the SET command, including optional PX expiry argument.
+     * 
+     * @param parsedElements The parsed elements of the SET command.
+     * @param clientChannel The client channel to send a response to.
+     */
+    private static void handleSetCommand(List<String> parsedElements, SocketChannel clientChannel) throws IOException {
+        String key = parsedElements.get(1);
+        String value = parsedElements.get(2);
+        long expiryTime = -1; // Default expiry time (-1 means no expiry)
+
+        // Check if there's an expiry option
+        if (parsedElements.size() >= 4 && parsedElements.get(3).equalsIgnoreCase("px")) {
+            expiryTime = System.currentTimeMillis() + Long.parseLong(parsedElements.get(4));
+        }
+
+        // Store the value with the expiry time
+        storeSet.put(key, new ValueWithExpiry(value, expiryTime));
+
+        // Send the response to the client
+        String setResponse = "+OK\r\n";
+        ByteBuffer setResponseBuffer = ByteBuffer.wrap(setResponse.getBytes());
+        clientChannel.write(setResponseBuffer);
+    }
+
+    /**
+     * Retrieves the value for a given key, checking if it has expired.
+     * 
+     * @param key The key to retrieve the value for.
+     * @return The value or null if the key does not exist or has expired.
+     */
+    private static String getValueWithExpiryCheck(String key) {
+        ValueWithExpiry valueWithExpiry = storeSet.get(key);
+
+        if (valueWithExpiry == null) {
+            return null;  // Key does not exist
+        }
+
+        // Check if the key has expired
+        if (valueWithExpiry.expiryTime != -1 && System.currentTimeMillis() > valueWithExpiry.expiryTime) {
+            storeSet.remove(key);  // Remove the expired key
+            return null;  // Key has expired
+        }
+
+        return valueWithExpiry.value;
+    }
+
+    /**
+     * Encodes a string as a RESP string or a null bulk string.
+     * @param input String to encode
+     * @return RESP encoded string or null bulk string if input is null.
+     */
+    private static ByteBuffer encodeStringAsRESP(String input) {
+        if (input == null) {
+            return ByteBuffer.wrap("$-1\r\n".getBytes());  // Null bulk string
+        }
+        String encodedString = "$" + input.length() + "\r\n" + input + "\r\n";
+        return ByteBuffer.wrap(encodedString.getBytes());
     }
 }
