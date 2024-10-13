@@ -62,7 +62,16 @@ public class Main {
                 dbfilename = args[i + 1];
             }
         }
+    
+        // Provide default values if the arguments are missing
+        if (dir == null) {
+            dir = ".";  // Default to current directory
+        }
+        if (dbfilename == null) {
+            dbfilename = "dump.rdb";  // Default to "dump.rdb"
+        }
     }
+    
 
     private static void handleAccept(ServerSocketChannel serverSocketChannel, Selector selector) throws IOException {
         SocketChannel clientChannel = serverSocketChannel.accept();
@@ -135,6 +144,9 @@ public class Main {
             case "get":
                 String userGivenKey = parsedElements.get(1);
                 String valueFromStore = getValueWithExpiryCheck(userGivenKey);
+                if (valueFromStore == null) {
+                    valueFromStore = readValueFromRdb(userGivenKey);
+                }
                 clientChannel.write(encodeStringAsRESP(valueFromStore));
                 break;
             case "keys":
@@ -146,6 +158,52 @@ public class Main {
                 }
                 break;
         }
+    }
+
+    private static String readValueFromRdb(String key) {
+        if (dir == null || dbfilename == null) {
+            System.err.println("Error: Database directory or filename is not set.");
+            return null;
+        }
+    
+        File dbFile = new File(dir, dbfilename);
+        if (!dbFile.exists()) {
+            System.err.println("Error: RDB file not found: " + dbFile.getAbsolutePath());
+            return null;
+        }
+    
+        try (InputStream fis = new FileInputStream(dbFile)) {
+            byte[] redis = new byte[5];
+            byte[] version = new byte[4];
+            fis.read(redis);
+            fis.read(version);
+            int b;
+            while ((b = fis.read()) != -1) {
+                if (b == 0xFF) {
+                    break;
+                } else if (b == 0xFE) {
+                    fis.read();
+                } else if (b == 0xFB) {
+                    fis.readNBytes(lengthEncoding(fis, fis.read()));
+                    fis.readNBytes(lengthEncoding(fis, fis.read()));
+                    break;
+                }
+            }
+            while ((b = fis.read()) != -1) {
+                int strLength = lengthEncoding(fis, b);
+                byte[] bytes = fis.readNBytes(strLength);
+                String readKey = new String(bytes);
+                if (key.equals(readKey)) {
+                    int valueLength = lengthEncoding(fis, fis.read());
+                    byte[] valueBytes = fis.readNBytes(valueLength);
+                    return new String(valueBytes);
+                }
+                fis.readNBytes(lengthEncoding(fis, fis.read()));
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return null;
     }
 
     private static void handleKeysCommand(SocketChannel clientChannel) throws IOException {
