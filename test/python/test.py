@@ -26,15 +26,8 @@ def run_redis_test_with_formatting(commmand: str) -> None:
     run_redis_test(formatted_commands)
     print("-" * 50)
 
-run_redis_test_with_formatting('PING')
 
+run_redis_test_with_formatting('PING')
+run_redis_test_with_formatting('CONFIG GET dir')
 run_redis_test_with_formatting('SET foo bar')
 run_redis_test_with_formatting('GET foo')
-
-
-
-run_redis_test_with_formatting('SET test123 gonsnoig px 5000')
-
-run_redis_test_with_formatting('GET test123')
-time.sleep(6)
-run_redis_test_with_formatting('GET test123')
